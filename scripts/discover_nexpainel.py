@@ -1,17 +1,18 @@
-"""One-off discovery script: logs into nexpainel.lovable.app, opens /tt-semanal,
-and dumps the rendered HTML, a screenshot, and every network request/response
-seen along the way (many Lovable/Supabase apps call a REST API directly —
-capturing that is often more useful than scraping the DOM).
+"""Round 2 of nexpainel discovery: the app is Supabase-backed (confirmed via
+round 1's network log — login hits {project}.supabase.co/auth/v1/token, then
+the UI queries {project}.supabase.co/rest/v1/<table> with a bearer JWT).
 
-Run only via the "discover" GitHub Actions workflow. Writes to
-discover_output/nexpainel/ as a workflow artifact.
+This round prints a compact index of every rest/v1 and rpc call seen while
+navigating to /tt-semanal (url + method + status only, so it fits in the log
+without truncation), then full bodies only for the calls whose table/function
+name looks sales/weekly related.
 """
 
 from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
+import re
 
 from playwright.sync_api import sync_playwright
 
@@ -19,8 +20,10 @@ EMAIL = os.environ["NEXPAINEL_EMAIL"]
 PASSWORD = os.environ["NEXPAINEL_PASSWORD"]
 TARGET_URL = "https://nexpainel.lovable.app/tt-semanal"
 
-OUT_DIR = Path("discover_output/nexpainel")
-OUT_DIR.mkdir(parents=True, exist_ok=True)
+INTERESTING = re.compile(
+    r"venda|reserva|weekly|semanal|fatura|receita|produto|funil|linha|deal|lead|invest|ads|roas|booking|contrato",
+    re.IGNORECASE,
+)
 
 network_log = []
 
@@ -28,7 +31,9 @@ network_log = []
 def log_response(response):
     try:
         url = response.url
-        if any(url.endswith(ext) for ext in [".js", ".css", ".png", ".svg", ".woff2", ".ico"]):
+        if "supabase.co" not in url:
+            return
+        if any(seg in url for seg in ["/auth/v1/", "/storage/v1/"]):
             return
         entry = {"url": url, "status": response.status, "method": response.request.method}
         ctype = response.headers.get("content-type", "")
@@ -49,33 +54,25 @@ def main() -> None:
         page.on("response", log_response)
 
         page.goto("https://nexpainel.lovable.app/", wait_until="networkidle", timeout=30000)
-        page.screenshot(path=str(OUT_DIR / "01_landing.png"))
-        (OUT_DIR / "01_landing.html").write_text(page.content(), encoding="utf-8")
-
         _try_login(page)
 
         page.goto(TARGET_URL, wait_until="networkidle", timeout=30000)
-        page.wait_for_timeout(3000)
-        page.screenshot(path=str(OUT_DIR / "02_tt_semanal.png"), full_page=True)
-        (OUT_DIR / "02_tt_semanal.html").write_text(page.content(), encoding="utf-8")
-
-        (OUT_DIR / "network_log.json").write_text(
-            json.dumps(network_log, indent=2, ensure_ascii=False, default=str), encoding="utf-8"
-        )
+        page.wait_for_timeout(4000)
         browser.close()
 
-    print(f"\ncurrent URL after login+navigation attempt: (see network log below)")
-    print(f"\n=== network_log.json ({len(network_log)} entries) ===")
-    text = json.dumps(network_log, indent=2, ensure_ascii=False, default=str)
-    if len(text) > 12000:
-        text = text[:12000] + f"\n... [truncated, {len(text)} chars total]"
-    print(text)
+    print(f"\n=== rest/v1 + rpc calls index ({len(network_log)} total) ===")
+    for e in network_log:
+        path = e["url"].split("supabase.co", 1)[-1]
+        print(f"{e['method']} {e['status']} {path}")
 
-    html = (OUT_DIR / "02_tt_semanal.html").read_text(encoding="utf-8")
-    print(f"\n=== 02_tt_semanal.html (first 3000 chars of {len(html)}) ===")
-    print(html[:3000])
+    print("\n=== full bodies for interesting calls ===")
+    for e in network_log:
+        path = e["url"].split("supabase.co", 1)[-1]
+        if INTERESTING.search(path) and e.get("body") is not None:
+            text = json.dumps(e["body"], indent=2, ensure_ascii=False, default=str)[:4000]
+            print(f"\n--- {e['method']} {path} ---\n{text}")
 
-    print(f"\nDiscovery complete. Inspect {OUT_DIR}/")
+    print("\nDiscovery round 2 complete.")
 
 
 def _try_login(page) -> None:
@@ -83,16 +80,6 @@ def _try_login(page) -> None:
     password_selectors = ['input[type="password"]', 'input[name="password"]']
 
     email_input = _first_visible(page, email_selectors)
-    if not email_input:
-        print("No email input found on landing page — app may already show a login link/button.")
-        for text in ["Entrar", "Login", "Log in", "Sign in"]:
-            btn = page.get_by_text(text, exact=False)
-            if btn.count() > 0:
-                btn.first.click()
-                page.wait_for_timeout(1500)
-                break
-        email_input = _first_visible(page, email_selectors)
-
     if email_input:
         email_input.fill(EMAIL)
         pwd_input = _first_visible(page, password_selectors)
@@ -101,7 +88,7 @@ def _try_login(page) -> None:
         page.keyboard.press("Enter")
         page.wait_for_timeout(3000)
     else:
-        print("WARNING: could not locate a login form — dumping page as-is for manual inspection.")
+        print("WARNING: could not locate a login form.")
 
 
 def _first_visible(page, selectors: list[str]):

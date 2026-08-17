@@ -1,10 +1,8 @@
-"""One-off discovery script: probes the Reportei API with the configured token
-and prints raw responses to stdout (captured in the GitHub Actions job log)
-so the real client (reportei_client.py) can be built against actual response
-shapes instead of guessed ones.
-
-Run only via the "discover" GitHub Actions workflow (needs real network
-access, which local/sandboxed dev sessions may not have).
+"""Round 2 of Reportei API discovery: now that we know the shape (client_id
+458229 "Nex", integrations for RD Station Marketing/CRM/Google Ads, and
+pre-built "reports" a.k.a. dashboards), dig into report widgets and
+integration-level metrics endpoints to find where actual date-ranged,
+campaign/funnel-level numbers live.
 """
 
 from __future__ import annotations
@@ -17,8 +15,19 @@ import requests
 TOKEN = os.environ["REPORTEI_API_TOKEN"]
 BASE = "https://app.reportei.com/api/v1"
 HEADERS = {"Authorization": f"Bearer {TOKEN}", "Accept": "application/json"}
+CLIENT_ID = 458229
 
-MAX_PRINT = 4000
+INTEGRATIONS = {
+    "rd_marketing": 1351098,
+    "rd_crm": 1351117,
+    "google_ads": 1979996,
+}
+REPORT_IDS = {
+    "WEEKLY_TT": 2874248,
+    "WEEKLY_Sales": 4762966,
+}
+
+MAX_PRINT = 3500
 
 
 def show(label: str, data) -> None:
@@ -31,71 +40,43 @@ def show(label: str, data) -> None:
 def get(path: str, params: dict | None = None) -> dict:
     url = f"{BASE}{path}"
     try:
-        resp = requests.get(url, headers=HEADERS, params=params, timeout=20)
+        resp = requests.get(url, headers=HEADERS, params=params, timeout=25)
         try:
             body = resp.json()
         except Exception:  # noqa: BLE001
-            body = resp.text[:2000]
-        return {"url": url, "status": resp.status_code, "body": body}
+            body = resp.text[:1500]
+        return {"url": resp.url, "status": resp.status_code, "body": body}
     except Exception as e:  # noqa: BLE001
         return {"url": url, "error": str(e)}
 
 
+def probe(label: str, path: str, params: dict | None = None) -> None:
+    r = get(path, params)
+    status = r.get("status")
+    print(f"probe {path} params={params}: {status or r.get('error')}")
+    if status == 200:
+        show(label, r)
+
+
 def main() -> None:
-    me = get("/me")
-    show("GET /me", me)
+    for name, report_id in REPORT_IDS.items():
+        probe(f"report {name} detail", f"/clients/{CLIENT_ID}/reports/{report_id}")
+        for sub in ["/widgets", "/blocks", "/data", "/metrics"]:
+            probe(f"report {name}{sub}", f"/clients/{CLIENT_ID}/reports/{report_id}{sub}")
 
-    candidate_paths = [
-        "/customers",
-        "/accounts",
-        "/companies",
-        "/clients",
-        "/workspaces",
-        "/organizations",
-        "/dashboards",
-        "/reports",
-        "/integrations",
-        "/data-sources",
-        "/connections",
-        "/projects",
+    date_params_variants = [
+        {"start_date": "2026-08-10", "end_date": "2026-08-17"},
+        {"date_start": "2026-08-10", "date_end": "2026-08-17"},
+        {"from": "2026-08-10", "to": "2026-08-17"},
     ]
-    found_lists = {}
-    for path in candidate_paths:
-        r = get(path)
-        status = r.get("status")
-        marker = "OK" if status == 200 else str(status or r.get("error"))
-        print(f"probe {path}: {marker}")
-        if status == 200:
-            found_lists[path] = r
-            show(f"GET {path}", r)
 
-    ids_to_explore = []
-    for path, r in found_lists.items():
-        body = r.get("body")
-        ids = _extract_ids(body)
-        if ids:
-            print(f"{path} -> ids found: {ids[:10]}")
-            ids_to_explore.extend((path, i) for i in ids[:3])
+    for int_name, int_id in INTEGRATIONS.items():
+        for sub in ["/metrics", "/data", "/campaigns", "/funnels", "/deals"]:
+            path = f"/clients/{CLIENT_ID}/integrations/{int_id}{sub}"
+            probe(f"{int_name}{sub} (no params)", path)
+            probe(f"{int_name}{sub} (dates)", path, date_params_variants[0])
 
-    for path, cid in ids_to_explore[:6]:
-        detail = get(f"{path}/{cid}")
-        show(f"GET {path}/{cid}", detail)
-        for sub in ["/integrations", "/data-sources", "/metrics", "/reports", "/campaigns", "/funnels"]:
-            sub_resp = get(f"{path}/{cid}{sub}")
-            if sub_resp.get("status") == 200:
-                show(f"GET {path}/{cid}{sub}", sub_resp)
-
-    print("\nDiscovery complete.")
-
-
-def _extract_ids(body) -> list:
-    if isinstance(body, list):
-        return [item.get("id") for item in body if isinstance(item, dict) and "id" in item]
-    if isinstance(body, dict):
-        for key in ("data", "customers", "accounts", "results", "items"):
-            if key in body and isinstance(body[key], list):
-                return [item.get("id") for item in body[key] if isinstance(item, dict) and "id" in item]
-    return []
+    print("\nDiscovery round 2 complete.")
 
 
 if __name__ == "__main__":
