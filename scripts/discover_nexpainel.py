@@ -63,7 +63,19 @@ def main() -> None:
             json.dumps(network_log, indent=2, ensure_ascii=False, default=str), encoding="utf-8"
         )
         browser.close()
-    print(f"Discovery complete. Inspect {OUT_DIR}/")
+
+    print(f"\ncurrent URL after login+navigation attempt: (see network log below)")
+    print(f"\n=== network_log.json ({len(network_log)} entries) ===")
+    text = json.dumps(network_log, indent=2, ensure_ascii=False, default=str)
+    if len(text) > 12000:
+        text = text[:12000] + f"\n... [truncated, {len(text)} chars total]"
+    print(text)
+
+    html = (OUT_DIR / "02_tt_semanal.html").read_text(encoding="utf-8")
+    print(f"\n=== 02_tt_semanal.html (first 3000 chars of {len(html)}) ===")
+    print(html[:3000])
+
+    print(f"\nDiscovery complete. Inspect {OUT_DIR}/")
 
 
 def _try_login(page) -> None:
