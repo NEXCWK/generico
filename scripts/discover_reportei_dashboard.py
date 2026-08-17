@@ -1,7 +1,10 @@
-"""Discovers how Reportei's rendered dashboard pages fetch their widget data,
-by opening the public share links for the "[WEEKLY] TT" and "[WEEKLY] Sales"
-dashboards (found via the API in round 1) and capturing XHR/fetch calls.
-No login needed — these are public share URLs.
+"""Round 2: the previous run showed Reportei's dashboard pages call
+`/broadcasting/auth-external` (a Laravel Echo / Pusher auth handshake) but no
+REST endpoint carrying actual widget values — meaning the widget data most
+likely arrives over a WebSocket (Pusher) channel, not a plain HTTP response.
+
+This round listens for WebSocket connections and frames instead of HTTP
+responses, on the same public dashboard share URLs.
 """
 
 from __future__ import annotations
@@ -15,50 +18,44 @@ DASHBOARDS = {
     "WEEKLY_Sales": "https://app.reportei.com/dashboard/d4CLKoh3AweubvVlEIbeJqTgStcFDsD6",
 }
 
-captured = []
+ws_events = []
 
 
-def log_response(response):
-    try:
-        url = response.url
-        if any(seg in url for seg in [".js", ".css", ".png", ".svg", ".woff", ".ico", ".jpg"]):
-            return
-        ctype = response.headers.get("content-type", "")
-        if "json" not in ctype:
-            return
-        try:
-            body = response.json()
-        except Exception:  # noqa: BLE001
-            return
-        captured.append({"url": url, "status": response.status, "body": body})
-    except Exception:  # noqa: BLE001
-        pass
+def on_websocket(ws):
+    ws_events.append({"type": "open", "url": ws.url})
+    ws.on("framereceived", lambda payload: ws_events.append({"type": "recv", "url": ws.url, "payload": _trunc(payload)}))
+    ws.on("framesent", lambda payload: ws_events.append({"type": "sent", "url": ws.url, "payload": _trunc(payload)}))
+    ws.on("close", lambda: ws_events.append({"type": "close", "url": ws.url}))
+
+
+def _trunc(payload) -> str:
+    s = payload if isinstance(payload, str) else repr(payload)
+    return s[:3000]
 
 
 def main() -> None:
     with sync_playwright() as p:
         browser = p.chromium.launch()
         for name, url in DASHBOARDS.items():
-            captured.clear()
+            ws_events.clear()
             page = browser.new_page()
-            page.on("response", log_response)
+            page.on("websocket", on_websocket)
             try:
                 page.goto(url, wait_until="networkidle", timeout=30000)
-                page.wait_for_timeout(4000)
+                page.wait_for_timeout(6000)
             except Exception as e:  # noqa: BLE001
                 print(f"error loading {name}: {e}")
-            print(f"\n=== {name} ({url}) -> {len(captured)} JSON responses ===")
-            for entry in captured:
-                print(f"{entry['status']} {entry['url']}")
-            for entry in captured[:8]:
-                text = json.dumps(entry["body"], indent=2, ensure_ascii=False, default=str)
-                if len(text) > 2500:
-                    text = text[:2500] + f"... [truncated, {len(text)} chars]"
-                print(f"\n--- body: {entry['url']} ---\n{text}")
+
+            print(f"\n=== {name} ({url}) -> {len(ws_events)} ws events ===")
+            for e in ws_events:
+                if e["type"] in ("open", "close"):
+                    print(f"{e['type']} {e['url']}")
+                else:
+                    print(f"{e['type']} {e['url']}\n  {e['payload']}")
             page.close()
         browser.close()
 
-    print("\nDashboard discovery complete.")
+    print("\nWebSocket discovery complete.")
 
 
 if __name__ == "__main__":
