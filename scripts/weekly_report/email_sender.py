@@ -7,15 +7,19 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 
+DEFAULT_RECIPIENTS = ["felipe@nex.work", "bruna@nexcoworking.com.br"]
+
+
 def send_report_email(html_content: str, period_label: str) -> None:
     sender = os.environ["GMAIL_SENDER_ADDRESS"]
     app_password = os.environ["GMAIL_APP_PASSWORD"]
-    recipient = os.environ.get("REPORT_RECIPIENT", "felipe@nex.work")
+    recipients_env = os.environ.get("REPORT_RECIPIENTS")
+    recipients = [r.strip() for r in recipients_env.split(",")] if recipients_env else DEFAULT_RECIPIENTS
 
     msg = MIMEMultipart()
     msg["Subject"] = f"Relatório Semanal Nex — {period_label}"
     msg["From"] = sender
-    msg["To"] = recipient
+    msg["To"] = ", ".join(recipients)
 
     msg.attach(MIMEText("Segue em anexo o relatório semanal de performance comercial.", "plain"))
 
@@ -25,4 +29,4 @@ def send_report_email(html_content: str, period_label: str) -> None:
 
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
         server.login(sender, app_password)
-        server.sendmail(sender, [recipient], msg.as_string())
+        server.sendmail(sender, recipients, msg.as_string())

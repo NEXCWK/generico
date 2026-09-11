@@ -50,7 +50,7 @@ scripts/render_preview.py      Gera uma prévia com dados fictícios
 | `NEXPAINEL_PASSWORD` | Senha do painel `nexpainel.lovable.app` |
 | `GMAIL_SENDER_ADDRESS` | Endereço @nex.work que envia o relatório |
 | `GMAIL_APP_PASSWORD` | App Password do Gmail/Workspace para esse endereço |
-| `REPORT_RECIPIENT` | Destinatário do relatório (default: `felipe@nex.work`) |
+| `REPORT_RECIPIENTS` | Destinatários do relatório, separados por vírgula (default: `felipe@nex.work, bruna@nexcoworking.com.br`) |
 
 Essas variáveis devem ser configuradas como **Environment Variables no
 ambiente do Claude Code Remote** usado por esta automação (não em um
